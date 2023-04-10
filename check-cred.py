@@ -2,6 +2,7 @@ import socket
 import subprocess
 import getpass
 import shlex
+import sys
 
 
 def check_host(host, port):
@@ -16,64 +17,66 @@ def check_host(host, port):
 
 def mysql_cred_check(host, user, password):
     """Check if MySQL credentials are valid."""
-    try:
-        subprocess.run(f"mysql -h {host} -u {user} -p{password} -e 'select version();'",
-                       shell=True, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        print(f"[x] Credentials are valid for host: {host}")
-    except subprocess.CalledProcessError as e:
-        print(f"[!] Credentials are invalid for host: {host} with error: {e}")
+    command = f"mysql -h {host} -u {user} -p{shlex.quote(password)} -e 'select version();'"
+    return run_command(host, command, "MySQL")
 
 
 def mssql_cred_check(host, user, password, database):
     """Check if MSSQL credentials are valid."""
-    try:
-        subprocess.run(f"sqlcmd -S {host} -U {user} -P {password} -d {database} -Q 'SELECT @@VERSION'",
-                       shell=True, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        print(f"[x] Credentials are valid for host: {host}")
-    except subprocess.CalledProcessError as e:
-        print(f"[!] Credentials are invalid for host: {host} with error: {e}")
+    command = f"sqlcmd -S {host} -U {user} -P {shlex.quote(password)} -d {database} -Q 'SELECT @@VERSION'"
+    return run_command(host, command, "MSSQL")
 
 
 def ssh_cred_check(host, port, user, password, sudo):
     """Check if SSH credentials are valid and if user has sudo access if specified."""
-    try:
-        cmd = [
-            "ssh",
-            "-o", "StrictHostKeyChecking=no",
-            f"{user}@{host}",
-            "-p", str(port),
-        ]
-        if sudo:
-            cmd.append("sudo echo test")
-            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, input=f"{password}\n".encode())
-            print(f"[x] Credentials are valid for host: {host} with sudo access")
-        else:
-            cmd.append("echo test")
-            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, input=f"{password}\n".encode())
-            print(f"[x] Credentials are valid for host: {host}")
-    except subprocess.CalledProcessError as e:
-        print(f"[!] Credentials are invalid for host: {host} with error code: {e.returncode}")
-        print(f"Output: {e.output}")
-        subprocess.run(["ssh", "-o", "StrictHostKeyChecking=no", f"{user}@{host}", "-p", str(port), "exit"],
-                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, input=f"{password}\n")
+    cmd = [
+        "ssh",
+        "-o", "StrictHostKeyChecking=no",
+        f"{user}@{host}",
+        "-p", str(port),
+    ]
+    if sudo:
+        cmd.append("sudo echo test")
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, input=f"{password}\n".encode())
+        print_result(host, result, "SSH (with sudo)")
+    else:
+        cmd.append("echo test")
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, input=f"{password}\n".encode())
+        print_result(host, result, "SSH")
+
+    subprocess.run(["ssh", "-o", "StrictHostKeyChecking=no", f"{user}@{host}", "-p", str(port), "exit"],
+                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, input=f"{password}\n")
 
 
 def smb_cred_check(host, user, password):
     """Check if SMB credentials are valid."""
-    try:
-        if sys.platform.startswith('win'):  # Windows
-            command = f"net use \\\\{host}\\admin$ /user:{user} {shlex.quote(password)}"
-            subprocess.run(command, shell=True, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            print(f"[x] Credentials are valid for host: {host}")
-            # Delete the mapped drive after checking the credentials
-            subprocess.run(f"net use \\\\{host}\\admin$ /delete", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        else:  # Linux
-            command = f"smbclient //{host}/admin$ -U {user}%{shlex.quote(password)} -c \"ls\""
-            subprocess.run(command, shell=True, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            print(f"[x] Credentials are valid for host: {host}")
+    if sys.platform.startswith('win'):  # Windows
+        command = f"net use \\\\{host}\\admin$ /user:{user} {shlex.quote(password)}"
+        result = run_command(host, command, "SMB")
+        # Delete the mapped drive after checking the credentials
+        subprocess.run(f"net use \\\\{host}\\admin$ /delete", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    else:  # Linux
+        command = f"smbclient //{host}/admin$ -U {user}%{shlex.quote(password)} -c \"ls\""
+        result = run_command(host, command, "SMB")
+    return result
 
-    except subprocess.CalledProcessError:
-        print(f"[!] Credentials are invalid for host: {host}")
+
+def run_command(host, command, service_name):
+    try:
+        subprocess.run(command, shell=True, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        print(f"[x] {service_name} credentials are valid for host: {host}")
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"[!] {service_name} credentials are invalid for host: {host} with error: {e}")
+        return False
+
+
+def print_result(host, result, service_name):
+    if result.returncode == 0:
+        print(f"[x] {service_name} credentials are valid for host: {host}")
+    else:
+        print(f"[!] {service_name} credentials are invalid for host: {host}")
+        print(f"Output: {result.stdout.decode()}\nError: {result.stderr.decode()}")
 
 
 def menu():
