@@ -61,13 +61,21 @@ def ssh_cred_check(host, port, user, password, sudo):
 def smb_cred_check(host, user, password):
     """Check if SMB credentials are valid."""
     try:
-        subprocess.run(f"smbclient \\\\{host}\\admin$ -U {user}%{shlex.quote(password)} -c \"ls\"",
-                       shell=True, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        print(f"[x] Credentials are valid for host: {host}")
+        if sys.platform.startswith('win'):  # Windows
+            command = f"net use \\\\{host}\\admin$ /user:{user} {shlex.quote(password)}"
+            subprocess.run(command, shell=True, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            print(f"[x] Credentials are valid for host: {host}")
+            # Delete the mapped drive after checking the credentials
+            subprocess.run(f"net use \\\\{host}\\admin$ /delete", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:  # Linux
+            command = f"smbclient //{host}/admin$ -U {user}%{shlex.quote(password)} -c \"ls\""
+            subprocess.run(command, shell=True, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            print(f"[x] Credentials are valid for host: {host}")
+
     except subprocess.CalledProcessError:
         print(f"[!] Credentials are invalid for host: {host}")
 
-        
+
 def menu():
     while True:
         print("\n1. MySQL Credentials Check")
